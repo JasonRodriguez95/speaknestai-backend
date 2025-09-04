@@ -56,7 +56,7 @@ def process_with_gemini(audio_data, prompt_text):
         
         # Create the content with both text and audio
         audio_part = {
-            "mime_type": "audio/webm",  # Gemini espera webm incluso para Safari
+            "mime_type": "audio/webm",  # Gemini espera webm
             "data": audio_base64
         }
         
@@ -73,10 +73,8 @@ def process_conversation_with_gemini(audio_data, scenario, last_question, is_saf
         if not audio_data or len(audio_data) < 100:
             return "[color=ff0000]Error: Empty or too short audio[/color]", [{'text': '[color=ff0000]Empty audio[/color]', 'lang': 'es', 'duration': 0}]
 
-        # Para Safari, el audio viene en formato M4A pero Gemini espera WEBM
-        # En este caso, procesamos directamente ya que Gemini parece manejar la conversión internamente
-        if is_safari:
-            print("Processing audio from Safari iOS (M4A format)")
+        # Log para debugging
+        print(f"Processing conversation: scenario={scenario}, is_safari={is_safari}, audio_size={len(audio_data)}")
         
         scenarios = {
             'restaurant': "You're a waiter in a restaurant, and the user is a customer ordering their favorite food.",
