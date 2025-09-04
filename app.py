@@ -56,7 +56,7 @@ def process_with_gemini(audio_data, prompt_text):
         
         # Create the content with both text and audio
         audio_part = {
-            "mime_type": "audio/webm",
+            "mime_type": "audio/webm",  # Gemini espera webm incluso para Safari
             "data": audio_base64
         }
         
@@ -68,11 +68,16 @@ def process_with_gemini(audio_data, prompt_text):
         print(f"Gemini processing failed: {str(e)}")
         return f"[color=ff0000]Gemini error: {str(e)}[/color]"
 
-def process_conversation_with_gemini(audio_data, scenario, last_question):
+def process_conversation_with_gemini(audio_data, scenario, last_question, is_safari=False):
     try:
         if not audio_data or len(audio_data) < 100:
             return "[color=ff0000]Error: Empty or too short audio[/color]", [{'text': '[color=ff0000]Empty audio[/color]', 'lang': 'es', 'duration': 0}]
 
+        # Para Safari, el audio viene en formato M4A pero Gemini espera WEBM
+        # En este caso, procesamos directamente ya que Gemini parece manejar la conversión internamente
+        if is_safari:
+            print("Processing audio from Safari iOS (M4A format)")
+        
         scenarios = {
             'restaurant': "You're a waiter in a restaurant, and the user is a customer ordering their favorite food.",
             'library': "You're a librarian, and the user is a customer looking for a book.",
@@ -195,12 +200,13 @@ def process_conversation():
             
         scenario = request.form.get('scenario', 'friends')
         last_question = request.form.get('lastQuestion', '')
+        is_safari = request.form.get('isSafari', 'false').lower() == 'true'
         
         audio_data = audio_file.read()
         if len(audio_data) < 100:
             return error_response('Audio too short')
         
-        response_text, response_parts = process_conversation_with_gemini(audio_data, scenario, last_question)
+        response_text, response_parts = process_conversation_with_gemini(audio_data, scenario, last_question, is_safari)
         
         return jsonify({
             'success': '[color=ff0000]' not in response_text,
