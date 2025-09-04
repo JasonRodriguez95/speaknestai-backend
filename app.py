@@ -2,13 +2,13 @@ import os
 from flask import Flask, request, jsonify, send_from_directory
 import google.generativeai as genai
 import re
-import time
 import base64
 from dotenv import load_dotenv
 from flask_cors import CORS
+import mimetypes
 
 app = Flask(__name__)
-CORS(app)  # Habilitar CORS para todos los dominios
+CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
 
 # Cargar variables de entorno desde .env
 load_dotenv()
@@ -21,42 +21,51 @@ genai.configure(api_key=api_key)
 
 def extract_segments(text):
     """Extract segments marked with [es] or [en]"""
-    pattern = r'\[(es|en)\](.*?)(?=\[|$)'
+    pattern = r'\[(es|en)\](.*?)(?=\[|$|\n\n)'
     segments = re.findall(pattern, text, re.DOTALL)
     return [(lang, text.strip()) for lang, text in segments if text.strip()]
 
 def error_response(message, status_code=400):
+    """Generate standardized error response"""
+    print(f"Error response: {message}")
     return jsonify({
         'success': False,
         'response': [{'text': f'[color=ff0000]{message}[/color]', 'lang': 'es', 'duration': 0}]
     }), status_code
 
-def audio_to_base64(audio_data):
+def audio_to_base64(audio_data, mime_type):
     """Convert audio data to base64 for Gemini API"""
     try:
+        print(f"Converting audio to base64, MIME type: {mime_type}")
         return base64.b64encode(audio_data).decode('utf-8')
     except Exception as e:
         print(f"Error converting audio to base64: {str(e)}")
         return None
 
-def process_with_gemini(audio_data, prompt_text):
+def process_with_gemini(audio_data, prompt_text, mime_type='audio/webm'):
+    """Process audio with Gemini API"""
     try:
         if not audio_data or len(audio_data) == 0:
+            print("Error: Empty audio data received")
             return "[color=ff0000]Error: Empty audio data[/color]"
-
-        print(f"Processing audio with Gemini, size: {len(audio_data)} bytes")
         
-        # Convert audio to base64
-        audio_base64 = audio_to_base64(audio_data)
+        print(f"Processing audio with Gemini, size: {len(audio_data)} bytes, MIME: {mime_type}")
+        
+        audio_base64 = audio_to_base64(audio_data, mime_type)
         if not audio_base64:
+            print("Error: Failed to convert audio to base64")
             return "[color=ff0000]Error converting audio to base64[/color]"
         
-        # Initialize the model
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Create the content with both text and audio
+        # Ajustar MIME type según lo recibido
+        supported_mime_types = ['audio/webm', 'audio/mp4', 'audio/mpeg']
+        if mime_type not in supported_mime_types:
+            print(f"Unsupported MIME type: {mime_type}, using fallback: audio/webm")
+            mime_type = 'audio/webm'
+        
         audio_part = {
-            "mime_type": "audio/webm",  # Gemini espera webm
+            "mime_type": mime_type,
             "data": audio_base64
         }
         
@@ -68,13 +77,14 @@ def process_with_gemini(audio_data, prompt_text):
         print(f"Gemini processing failed: {str(e)}")
         return f"[color=ff0000]Gemini error: {str(e)}[/color]"
 
-def process_conversation_with_gemini(audio_data, scenario, last_question, is_safari=False):
+def process_conversation_with_gemini(audio_data, scenario, last_question, is_ios=False, is_chrome_ios=False):
+    """Process conversation audio with Gemini"""
     try:
         if not audio_data or len(audio_data) < 100:
+            print("Error: Audio too short or empty")
             return "[color=ff0000]Error: Empty or too short audio[/color]", [{'text': '[color=ff0000]Empty audio[/color]', 'lang': 'es', 'duration': 0}]
-
-        # Log para debugging
-        print(f"Processing conversation: scenario={scenario}, is_safari={is_safari}, audio_size={len(audio_data)}")
+        
+        print(f"Processing conversation: scenario={scenario}, is_ios={is_ios}, is_chrome_ios={is_chrome_ios}, audio_size={len(audio_data)}")
         
         scenarios = {
             'restaurant': "You're a waiter in a restaurant, and the user is a customer ordering their favorite food.",
@@ -100,13 +110,18 @@ def process_conversation_with_gemini(audio_data, scenario, last_question, is_saf
         [es] Puedes decir "I'd like a burger" para pedir una hamburguesa.
         """
         
-        response_text = process_with_gemini(audio_data, prompt)
+        # Determinar MIME type según navegador
+        mime_type = 'audio/webm' if is_ios or is_chrome_ios else 'audio/webm;codecs=opus'
+        
+        response_text = process_with_gemini(audio_data, prompt, mime_type)
         
         if not response_text:
+            print("Error: Empty response from Gemini")
             return "[color=ff0000]Empty response[/color]", [{'text': '[color=ff0000]Empty response[/color]', 'lang': 'es', 'duration': 0}]
         
         segments = extract_segments(response_text)
         if not segments:
+            print("Error: Invalid response format from Gemini")
             return "[color=ff0000]Invalid format[/color]", [{'text': '[color=ff0000]Invalid format[/color]', 'lang': 'es', 'duration': 0}]
         
         response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
@@ -117,6 +132,7 @@ def process_conversation_with_gemini(audio_data, scenario, last_question, is_saf
         return f"[color=ff0000]Error: {str(e)}[/color]", [{'text': f'[color=ff0000]{str(e)}[/color]', 'lang': 'es', 'duration': 0}]
 
 def process_intro_text(text, scenario):
+    """Process introductory text with Gemini"""
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
         
@@ -143,10 +159,12 @@ def process_intro_text(text, scenario):
         response_text = response.text.strip()
         
         if not response_text:
+            print("Error: Empty response for intro")
             return "[color=ff0000]Empty response[/color]", [{'text': '[color=ff0000]Empty response[/color]', 'lang': 'es', 'duration': 0}]
         
         segments = extract_segments(response_text)
         if not segments:
+            print("Error: Invalid format for intro response")
             return "[color=ff0000]Invalid format[/color]", [{'text': '[color=ff0000]Invalid format[/color]', 'lang': 'es', 'duration': 0}]
         
         response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
@@ -158,7 +176,9 @@ def process_intro_text(text, scenario):
 
 @app.route('/process_intro', methods=['POST', 'OPTIONS'])
 def process_intro():
+    """Handle intro text processing"""
     if request.method == 'OPTIONS':
+        print("Received OPTIONS request for /process_intro")
         return '', 200
         
     try:
@@ -171,6 +191,7 @@ def process_intro():
             
         text = data['text']
         scenario = data['scenario']
+        print(f"Processing intro: text={text[:50]}..., scenario={scenario}")
         
         response_text, response_parts = process_intro_text(text, scenario)
         
@@ -185,7 +206,9 @@ def process_intro():
 
 @app.route('/process_conversation', methods=['POST', 'OPTIONS'])
 def process_conversation():
+    """Handle conversation audio processing"""
     if request.method == 'OPTIONS':
+        print("Received OPTIONS request for /process_conversation")
         return '', 200
         
     try:
@@ -198,13 +221,19 @@ def process_conversation():
             
         scenario = request.form.get('scenario', 'friends')
         last_question = request.form.get('lastQuestion', '')
-        is_safari = request.form.get('isSafari', 'false').lower() == 'true'
+        is_ios = request.form.get('isIOS', 'false').lower() == 'true'
+        is_chrome_ios = request.form.get('isChromeIOS', 'false').lower() == 'true'
         
         audio_data = audio_file.read()
         if len(audio_data) < 100:
             return error_response('Audio too short')
         
-        response_text, response_parts = process_conversation_with_gemini(audio_data, scenario, last_question, is_safari)
+        # Determinar MIME type del archivo
+        mime_type, _ = mimetypes.guess_type(audio_file.filename)
+        mime_type = mime_type or 'audio/webm'
+        print(f"Received audio: filename={audio_file.filename}, MIME type={mime_type}, size={len(audio_data)}")
+        
+        response_text, response_parts = process_conversation_with_gemini(audio_data, scenario, last_question, is_ios, is_chrome_ios)
         
         return jsonify({
             'success': '[color=ff0000]' not in response_text,
@@ -217,7 +246,9 @@ def process_conversation():
 
 @app.route('/process_audio', methods=['POST', 'OPTIONS'])
 def process_audio():
+    """Handle audio pronunciation feedback"""
     if request.method == 'OPTIONS':
+        print("Received OPTIONS request for /process_audio")
         return '', 200
         
     try:
@@ -231,6 +262,10 @@ def process_audio():
         audio_data = audio_file.read()
         if len(audio_data) < 100:
             return error_response('Audio too short')
+        
+        mime_type, _ = mimetypes.guess_type(audio_file.filename)
+        mime_type = mime_type or 'audio/webm'
+        print(f"Processing audio feedback: filename={audio_file.filename}, MIME type={mime_type}, size={len(audio_data)}")
         
         prompt = """
         Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation and grammar.
@@ -253,7 +288,7 @@ def process_audio():
         [es] Te recomiendo seguir estudiando con el libro de SpeakNest AI, disponible en la función 'Lessons'. Este libro completo te ayudará a mejorar tus reglas, gramática, pronunciación y mucho más.
         """
         
-        feedback_text = process_with_gemini(audio_data, prompt)
+        feedback_text = process_with_gemini(audio_data, prompt, mime_type)
         segments = extract_segments(feedback_text)
         response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
         
@@ -268,10 +303,12 @@ def process_audio():
 
 @app.route('/')
 def index():
+    """Serve index.html"""
     return send_from_directory('../public', 'index.html')
 
 @app.route('/<path:filename>')
 def serve_static(filename):
+    """Serve static files"""
     return send_from_directory('../public', filename)
 
 if __name__ == '__main__':
