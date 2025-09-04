@@ -2,16 +2,15 @@ import os
 from flask import Flask, request, jsonify, send_from_directory
 import google.generativeai as genai
 import re
+import time
+import base64
 from dotenv import load_dotenv
 from flask_cors import CORS
 
 app = Flask(__name__)
-# Configurar CORS para permitir solicitudes desde el frontend
-CORS(app, resources={r"/*": {"origins": ["https://speaknestai.web.app", "https://speaknestai.firebaseapp.com", "http://localhost:5500"]}})
+CORS(app)  # Habilitar CORS para todos los dominios
 
-# ====================================================
-# Cargar variables de entorno
-# ====================================================
+# Cargar variables de entorno desde .env
 load_dotenv()
 
 # Configurar Gemini API
@@ -20,9 +19,6 @@ if not api_key:
     raise ValueError("No GEMINI_API_KEY found in environment variables")
 genai.configure(api_key=api_key)
 
-# ====================================================
-# Funciones auxiliares
-# ====================================================
 def extract_segments(text):
     """Extract segments marked with [es] or [en]"""
     pattern = r'\[(es|en)\](.*?)(?=\[|$)'
@@ -35,10 +31,47 @@ def error_response(message, status_code=400):
         'response': [{'text': f'[color=ff0000]{message}[/color]', 'lang': 'es', 'duration': 0}]
     }), status_code
 
-def process_conversation_with_gemini(text, scenario, last_question):
+def audio_to_base64(audio_data):
+    """Convert audio data to base64 for Gemini API"""
     try:
-        if not text or len(text) < 1:
-            return "[color=ff0000]Error: Empty or too short text[/color]", [{'text': '[color=ff0000]Empty text[/color]', 'lang': 'es', 'duration': 0}]
+        return base64.b64encode(audio_data).decode('utf-8')
+    except Exception as e:
+        print(f"Error converting audio to base64: {str(e)}")
+        return None
+
+def process_with_gemini(audio_data, prompt_text):
+    try:
+        if not audio_data or len(audio_data) == 0:
+            return "[color=ff0000]Error: Empty audio data[/color]"
+
+        print(f"Processing audio with Gemini, size: {len(audio_data)} bytes")
+        
+        # Convert audio to base64
+        audio_base64 = audio_to_base64(audio_data)
+        if not audio_base64:
+            return "[color=ff0000]Error converting audio to base64[/color]"
+        
+        # Initialize the model
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Create the content with both text and audio
+        audio_part = {
+            "mime_type": "audio/webm",
+            "data": audio_base64
+        }
+        
+        response = model.generate_content([prompt_text, audio_part])
+        print(f"Gemini response received: {response.text[:100]}...")
+        return response.text
+    
+    except Exception as e:
+        print(f"Gemini processing failed: {str(e)}")
+        return f"[color=ff0000]Gemini error: {str(e)}[/color]"
+
+def process_conversation_with_gemini(audio_data, scenario, last_question):
+    try:
+        if not audio_data or len(audio_data) < 100:
+            return "[color=ff0000]Error: Empty or too short audio[/color]", [{'text': '[color=ff0000]Empty audio[/color]', 'lang': 'es', 'duration': 0}]
 
         scenarios = {
             'restaurant': "You're a waiter in a restaurant, and the user is a customer ordering their favorite food.",
@@ -54,7 +87,7 @@ def process_conversation_with_gemini(text, scenario, last_question):
         prompt = f"""
         Act as a conversation partner in this scenario: {scenarios.get(scenario, scenarios['friends'])}.
         The user is the customer or participant seeking interaction, not the service provider.
-        Respond naturally in English with [en] tags based on the provided text input: {text}.
+        Respond naturally in English with [en] tags based on the provided audio input.
         Optionally include Spanish explanations with [es] tags.
         Keep responses short (1-2 sentences) and always end with a question to continue the conversation.
         {context}
@@ -64,9 +97,7 @@ def process_conversation_with_gemini(text, scenario, last_question):
         [es] Puedes decir "I'd like a burger" para pedir una hamburguesa.
         """
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        response_text = response.text.strip()
+        response_text = process_with_gemini(audio_data, prompt)
         
         if not response_text:
             return "[color=ff0000]Empty response[/color]", [{'text': '[color=ff0000]Empty response[/color]', 'lang': 'es', 'duration': 0}]
@@ -122,9 +153,6 @@ def process_intro_text(text, scenario):
         print(f"Gemini processing failed for intro: {str(e)}")
         return f"[color=ff0000]Error: {str(e)}[/color]", [{'text': f'[color=ff0000]{str(e)}[/color]', 'lang': 'es', 'duration': 0}]
 
-# ====================================================
-# Endpoints
-# ====================================================
 @app.route('/process_intro', methods=['POST', 'OPTIONS'])
 def process_intro():
     if request.method == 'OPTIONS':
@@ -158,21 +186,21 @@ def process_conversation():
         return '', 200
         
     try:
-        if not request.is_json:
-            return error_response('Request must be JSON')
+        if 'audio' not in request.files:
+            return error_response('Missing audio file')
             
-        data = request.get_json()
-        if not data or 'text' not in data:
-            return error_response('Missing text')
+        audio_file = request.files['audio']
+        if audio_file.filename == '':
+            return error_response('No selected file')
             
-        text = data['text']
-        scenario = data.get('scenario', 'friends')
-        last_question = data.get('lastQuestion', '')
+        scenario = request.form.get('scenario', 'friends')
+        last_question = request.form.get('lastQuestion', '')
         
-        if not text or len(text) < 1:
-            return error_response('Text too short')
+        audio_data = audio_file.read()
+        if len(audio_data) < 100:
+            return error_response('Audio too short')
         
-        response_text, response_parts = process_conversation_with_gemini(text, scenario, last_question)
+        response_text, response_parts = process_conversation_with_gemini(audio_data, scenario, last_question)
         
         return jsonify({
             'success': '[color=ff0000]' not in response_text,
@@ -189,19 +217,19 @@ def process_audio():
         return '', 200
         
     try:
-        if not request.is_json:
-            return error_response('Request must be JSON')
+        if 'audio' not in request.files:
+            return error_response('No audio file received')
             
-        data = request.get_json()
-        if not data or 'text' not in data:
-            return error_response('No text provided')
+        audio_file = request.files['audio']
+        if audio_file.filename == '':
+            return error_response('Empty filename')
             
-        text = data['text']
-        if not text or len(text) < 1:
-            return error_response('Text too short')
+        audio_data = audio_file.read()
+        if len(audio_data) < 100:
+            return error_response('Audio too short')
         
         prompt = """
-        Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation and grammar of the provided text.
+        Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation and grammar.
         Provide feedback with clear [es] and [en] tags. Never use asterisks (*) for emphasis, formatting, or any other purpose in the feedback text.
         
         Structure:
@@ -221,10 +249,8 @@ def process_audio():
         [es] Te recomiendo seguir estudiando con el libro de SpeakNest AI, disponible en la función 'Lessons'. Este libro completo te ayudará a mejorar tus reglas, gramática, pronunciación y mucho más.
         """
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        response_text = response.text.strip()
-        segments = extract_segments(response_text)
+        feedback_text = process_with_gemini(audio_data, prompt)
+        segments = extract_segments(feedback_text)
         response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
         
         return jsonify({
@@ -236,20 +262,6 @@ def process_audio():
         print(f"Server error in process_audio: {str(e)}")
         return error_response(f'Server error: {str(e)}')
 
-@app.route('/verify-admin-key', methods=['POST'])
-def verify_admin_key():
-    try:
-        data = request.get_json()
-        if not data or 'adminKey' not in data:
-            return jsonify({"success": False, "error": "Clave de administración no proporcionada"}), 400
-        admin_key = data['adminKey']
-        expected_key = os.getenv("ADMIN_SECRET_KEY")
-        if admin_key == expected_key:
-            return jsonify({"success": True}), 200
-        return jsonify({"success": False, "error": "Clave de administración incorrecta"}), 401
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
 @app.route('/')
 def index():
     return send_from_directory('../public', 'index.html')
@@ -258,8 +270,5 @@ def index():
 def serve_static(filename):
     return send_from_directory('../public', filename)
 
-# ====================================================
-# Main
-# ====================================================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
