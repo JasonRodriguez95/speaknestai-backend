@@ -2,7 +2,6 @@ import os
 from flask import Flask, request, jsonify, send_from_directory
 import google.generativeai as genai
 import re
-import base64
 from dotenv import load_dotenv
 from flask_cors import CORS
 
@@ -13,8 +12,6 @@ CORS(app, resources={r"/*": {"origins": ["https://speaknestai.web.app", "https:/
 # ====================================================
 # Cargar variables de entorno
 # ====================================================
-# En local carga .env
-# En producción (Render) usará variables de entorno inyectadas
 load_dotenv()
 
 # Configurar Gemini API
@@ -27,7 +24,7 @@ genai.configure(api_key=api_key)
 # Funciones auxiliares
 # ====================================================
 def extract_segments(text):
-    """Extrae segmentos marcados con [es] o [en]"""
+    """Extract segments marked with [es] or [en]"""
     pattern = r'\[(es|en)\](.*?)(?=\[|$)'
     segments = re.findall(pattern, text, re.DOTALL)
     return [(lang, text.strip()) for lang, text in segments if text.strip()]
@@ -38,35 +35,92 @@ def error_response(message, status_code=400):
         'response': [{'text': f'[color=ff0000]{message}[/color]', 'lang': 'es', 'duration': 0}]
     }), status_code
 
-def audio_to_base64(audio_data):
-    """Convierte audio a base64 para Gemini API"""
+def process_conversation_with_gemini(text, scenario, last_question):
     try:
-        return base64.b64encode(audio_data).decode('utf-8')
-    except Exception as e:
-        print(f"Error converting audio to base64: {str(e)}")
-        return None
+        if not text or len(text) < 1:
+            return "[color=ff0000]Error: Empty or too short text[/color]", [{'text': '[color=ff0000]Empty text[/color]', 'lang': 'es', 'duration': 0}]
 
-def process_with_gemini(audio_data, prompt_text):
-    try:
-        if not audio_data or len(audio_data) == 0:
-            return "[color=ff0000]Error: Empty audio data[/color]"
-
-        print(f"Processing audio with Gemini, size: {len(audio_data)} bytes")
+        scenarios = {
+            'restaurant': "You're a waiter in a restaurant, and the user is a customer ordering their favorite food.",
+            'library': "You're a librarian, and the user is a customer looking for a book.",
+            'cinema': "You're a ticket agent at a cinema, and the user is a customer wanting to watch a movie.",
+            'airport': "You're airport staff, and the user is a customer checking in for a flight.",
+            'park': "You're a friend in a park, and the user is a person wanting to talk about activities.",
+            'friends': "You're a friend having a casual conversation with the user."
+        }
         
-        audio_base64 = audio_to_base64(audio_data)
-        if not audio_base64:
-            return "[color=ff0000]Error converting audio to base64[/color]"
+        context = f"The last question you asked was: {last_question}" if last_question else ""
+        
+        prompt = f"""
+        Act as a conversation partner in this scenario: {scenarios.get(scenario, scenarios['friends'])}.
+        The user is the customer or participant seeking interaction, not the service provider.
+        Respond naturally in English with [en] tags based on the provided text input: {text}.
+        Optionally include Spanish explanations with [es] tags.
+        Keep responses short (1-2 sentences) and always end with a question to continue the conversation.
+        {context}
+        
+        Example:
+        [en] That sounds great! What would you like to order today?
+        [es] Puedes decir "I'd like a burger" para pedir una hamburguesa.
+        """
         
         model = genai.GenerativeModel('gemini-1.5-flash')
-        audio_part = {"mime_type": "audio/webm", "data": audio_base64}
+        response = model.generate_content(prompt)
+        response_text = response.text.strip()
         
-        response = model.generate_content([prompt_text, audio_part])
-        print(f"Gemini response received: {response.text[:100]}...")
-        return response.text
-    
+        if not response_text:
+            return "[color=ff0000]Empty response[/color]", [{'text': '[color=ff0000]Empty response[/color]', 'lang': 'es', 'duration': 0}]
+        
+        segments = extract_segments(response_text)
+        if not segments:
+            return "[color=ff0000]Invalid format[/color]", [{'text': '[color=ff0000]Invalid format[/color]', 'lang': 'es', 'duration': 0}]
+        
+        response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
+        return response_text, response_parts
+        
     except Exception as e:
-        print(f"Error in process_with_gemini: {str(e)}")
-        return f"[color=ff0000]Error processing with Gemini: {str(e)}[/color]"
+        print(f"Gemini processing failed: {str(e)}")
+        return f"[color=ff0000]Error: {str(e)}[/color]", [{'text': f'[color=ff0000]{str(e)}[/color]', 'lang': 'es', 'duration': 0}]
+
+def process_intro_text(text, scenario):
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        scenarios = {
+            'restaurant': "You're a waiter in a restaurant, and the user is a customer ordering their favorite food.",
+            'library': "You're a librarian, and the user is a customer looking for a book.",
+            'cinema': "You're a ticket agent at a cinema, and the user is a customer wanting to watch a movie.",
+            'airport': "You're airport staff, and the user is a customer checking in for a flight.",
+            'park': "You're a friend in a park, and the user is a person wanting to talk about activities.",
+            'friends': "You're a friend having a casual conversation with the user."
+        }
+        
+        prompt = f"""
+        You are starting a conversation in this scenario: {scenarios.get(scenario, scenarios['friends'])}.
+        The user is the customer or participant seeking interaction, not the service provider.
+        The following text is the introductory message: {text}.
+        Return the text exactly as provided, ensuring it is formatted with [en] tags and contains only English.
+        
+        Example:
+        [en] Welcome to our restaurant! What would you like to order today?
+        """
+        
+        response = model.generate_content(prompt)
+        response_text = response.text.strip()
+        
+        if not response_text:
+            return "[color=ff0000]Empty response[/color]", [{'text': '[color=ff0000]Empty response[/color]', 'lang': 'es', 'duration': 0}]
+        
+        segments = extract_segments(response_text)
+        if not segments:
+            return "[color=ff0000]Invalid format[/color]", [{'text': '[color=ff0000]Invalid format[/color]', 'lang': 'es', 'duration': 0}]
+        
+        response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
+        return response_text, response_parts
+        
+    except Exception as e:
+        print(f"Gemini processing failed for intro: {str(e)}")
+        return f"[color=ff0000]Error: {str(e)}[/color]", [{'text': f'[color=ff0000]{str(e)}[/color]', 'lang': 'es', 'duration': 0}]
 
 # ====================================================
 # Endpoints
@@ -77,23 +131,22 @@ def process_intro():
         return '', 200
         
     try:
-        data = request.get_json()
-        if not data or 'scenario' not in data:
-            return error_response('No scenario provided')
+        if not request.is_json:
+            return error_response('Request must be JSON')
             
-        scenario = data.get('scenario', 'friends')
-        prompt = f"""
-        You are a friendly English conversation partner for Spanish speakers.
-        Scenario: {scenario}.
-        Generate an introductory message in English with [en] tags and a Spanish translation with [es] tags.
-        """
+        data = request.get_json()
+        if not data or 'text' not in data or 'scenario' not in data:
+            return error_response('Missing text or scenario')
+            
+        text = data['text']
+        scenario = data['scenario']
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        segments = extract_segments(response.text)
-        response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
+        response_text, response_parts = process_intro_text(text, scenario)
         
-        return jsonify({'success': True, 'response': response_parts})
+        return jsonify({
+            'success': '[color=ff0000]' not in response_text,
+            'response': response_parts
+        })
         
     except Exception as e:
         print(f"Server error in process_intro: {str(e)}")
@@ -105,30 +158,21 @@ def process_conversation():
         return '', 200
         
     try:
-        if 'audio' not in request.files:
-            return error_response('No audio file received')
+        if not request.is_json:
+            return error_response('Request must be JSON')
             
-        audio_file = request.files['audio']
-        if audio_file.filename == '':
-            return error_response('Empty filename')
+        data = request.get_json()
+        if not data or 'text' not in data:
+            return error_response('Missing text')
             
-        scenario = request.form.get('scenario', 'friends')
-        last_question = request.form.get('lastQuestion', '')
+        text = data['text']
+        scenario = data.get('scenario', 'friends')
+        last_question = data.get('lastQuestion', '')
         
-        audio_data = audio_file.read()
-        if len(audio_data) < 100:
-            return error_response('Audio too short')
+        if not text or len(text) < 1:
+            return error_response('Text too short')
         
-        prompt = f"""
-        You are a friendly English conversation partner for Spanish speakers.
-        Scenario: {scenario}.
-        Last question: {last_question}.
-        Analyze the user's audio input and respond with a conversational reply in English [en] and its Spanish translation [es].
-        """
-        
-        response_text = process_with_gemini(audio_data, prompt)
-        segments = extract_segments(response_text)
-        response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
+        response_text, response_parts = process_conversation_with_gemini(text, scenario, last_question)
         
         return jsonify({
             'success': '[color=ff0000]' not in response_text,
@@ -145,27 +189,48 @@ def process_audio():
         return '', 200
         
     try:
-        if 'audio' not in request.files:
-            return error_response('No audio file received')
+        if not request.is_json:
+            return error_response('Request must be JSON')
             
-        audio_file = request.files['audio']
-        if audio_file.filename == '':
-            return error_response('Empty filename')
+        data = request.get_json()
+        if not data or 'text' not in data:
+            return error_response('No text provided')
             
-        audio_data = audio_file.read()
-        if len(audio_data) < 100:
-            return error_response('Audio too short')
+        text = data['text']
+        if not text or len(text) < 1:
+            return error_response('Text too short')
         
         prompt = """
-        Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation and grammar.
-        Provide feedback with clear [es] and [en] tags.
+        Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation and grammar of the provided text.
+        Provide feedback with clear [es] and [en] tags. Never use asterisks (*) for emphasis, formatting, or any other purpose in the feedback text.
+        
+        Structure:
+        1. [es] Positive reinforcement
+        2. [en] Correct pronunciation examples
+        3. [es] Specific corrections
+        4. [en] Practice phrases
+        5. [es] Encouragement
+        6. [es] Add a final recommendation: "Te recomiendo seguir estudiando con el libro de SpeakNest AI, disponible en la función 'Lessons'. Este libro completo te ayudará a mejorar tus reglas, gramática, pronunciación y mucho más."
+
+        Example:
+        [es] ¡Buen esfuerzo en tu pronunciación!
+        [en] Listen to how I say: The cat is on the mat.
+        [es] Trabaja en la pronunciación de la 'th' en 'the', asegurándote de que tu lengua esté entre tus dientes.
+        [en] Practice saying: The sun is shining brightly.
+        [es] ¡Sigue practicando, estás mejorando mucho!
+        [es] Te recomiendo seguir estudiando con el libro de SpeakNest AI, disponible en la función 'Lessons'. Este libro completo te ayudará a mejorar tus reglas, gramática, pronunciación y mucho más.
         """
         
-        feedback_text = process_with_gemini(audio_data, prompt)
-        segments = extract_segments(feedback_text)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        response_text = response.text.strip()
+        segments = extract_segments(response_text)
         response_parts = [{'text': text, 'lang': lang, 'duration': 0} for lang, text in segments]
         
-        return jsonify({'success': True, 'feedback': response_parts})
+        return jsonify({
+            'success': True,
+            'feedback': response_parts
+        })
         
     except Exception as e:
         print(f"Server error in process_audio: {str(e)}")
