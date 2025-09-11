@@ -229,24 +229,20 @@ def process_audio():
             return error_response('Audio too short')
         
         prompt = """
-        Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation and grammar.
-        Provide feedback with clear [es] and [en] tags. Never use asterisks (*) for emphasis, formatting, or any other purpose in the feedback text.
+        Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation in the provided audio.
+        Provide concise and dynamic feedback with [es] and [en] tags. Assign a pronunciation score from 0 (very poor) to 10 (native-like).
+        Vary the language in each response to avoid repetition, using natural and engaging phrases.
+        Never use asterisks (*) for emphasis or formatting.
         
         Structure:
-        1. [es] Positive reinforcement
-        2. [en] Correct pronunciation examples
-        3. [es] Specific corrections
-        4. [en] Practice phrases
-        5. [es] Encouragement
-        6. [es] Add a final recommendation: "Te recomiendo seguir estudiando con el libro de SpeakNest AI, disponible en la función 'Lessons'. Este libro completo te ayudará a mejorar tus reglas, gramática, pronunciación y mucho más."
-
+        1. [es] Brief positive feedback with the pronunciation score (0-10).
+        2. [es] One specific, concise correction (1-2 sentences) focusing on a key pronunciation issue.
+        3. [en] One short practice phrase to address the correction.
+        
         Example:
-        [es] ¡Buen esfuerzo en tu pronunciación!
-        [en] Listen to how I say: The cat is on the mat.
-        [es] Trabaja en la pronunciación de la 'th' en 'the', asegurándote de que tu lengua esté entre tus dientes.
-        [en] Practice saying: The sun is shining brightly.
-        [es] ¡Sigue practicando, estás mejorando mucho!
-        [es] Te recomiendo seguir estudiando con el libro de SpeakNest AI, disponible en la función 'Lessons'. Este libro completo te ayudará a mejorar tus reglas, gramática, pronunciación y mucho más.
+        [es] ¡Buen intento! Tu pronunciación tiene un puntaje de 7/10.
+        [es] Trabaja en pronunciar la 'r' más suave, evitando que suene como una 'rr' fuerte.
+        [en] Practice saying: The red rose blooms.
         """
         
         feedback_text = process_with_gemini(audio_data, prompt)
