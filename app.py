@@ -229,20 +229,25 @@ def process_audio():
             return error_response('Audio too short')
         
         prompt = """
-        Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation in the provided audio.
-        Provide concise and dynamic feedback with [es] and [en] tags. Assign a pronunciation score from 0 (very poor) to 10 (native-like).
-        Vary the language in each response to avoid repetition, using natural and engaging phrases.
-        Never use asterisks (*) for emphasis or formatting.
+        Act as a friendly English teacher for Spanish speakers. Analyze the pronunciation in the provided audio, focusing on clarity, fluency, accuracy, and intonation. Assign a pronunciation score from 0 (very poor, e.g., unintelligible or pronounced as if in another language) to 10 (native-like). Provide concise, dynamic feedback with [es] and [en] tags, tailoring corrections to specific sounds or words in the audio to avoid generic advice (e.g., avoid always mentioning 'th' unless relevant). Vary the language in each response to keep it engaging and avoid repetition. Never use asterisks (*) for emphasis or formatting.
         
         Structure:
         1. [es] Brief positive feedback with the pronunciation score (0-10).
-        2. [es] One specific, concise correction (1-2 sentences) focusing on a key pronunciation issue.
+        2. [es] One specific, concise correction (1-2 sentences) targeting a key pronunciation issue in the audio.
         3. [en] One short practice phrase to address the correction.
+        4. [es] Encouragement with the following text: "Continúa con el curso de SpeakNest AI, para mejorar cada día más y aprender reglas gramaticales y pronunciación, este curso está en el área Lessons. ¿Qué te parece si practicamos otro texto?"
+        
+        Scoring guidelines:
+        - 0-3: Unintelligible, heavily accented, or pronounced as if in another language (e.g., Spanish).
+        - 4-6: Understandable but with noticeable errors in pronunciation, fluency, or intonation.
+        - 7-8: Good pronunciation with minor errors, close to natural.
+        - 9-10: Near-native or native-like pronunciation with minimal or no errors.
         
         Example:
-        [es] ¡Buen intento! Tu pronunciación tiene un puntaje de 7/10.
-        [es] Trabaja en pronunciar la 'r' más suave, evitando que suene como una 'rr' fuerte.
-        [en] Practice saying: The red rose blooms.
+        [es] ¡Buen esfuerzo! Tu pronunciación tiene un puntaje de 6/10.
+        [es] Asegúrate de pronunciar la vocal 'i' corta en 'sit' correctamente, no como 'seat'.
+        [en] Practice saying: I sit on the chair.
+        [es] Continúa con el curso de SpeakNest AI, para mejorar cada día más y aprender reglas gramaticales y pronunciación, este curso está en el área Lessons. ¿Qué te parece si practicamos otro texto?
         """
         
         feedback_text = process_with_gemini(audio_data, prompt)
